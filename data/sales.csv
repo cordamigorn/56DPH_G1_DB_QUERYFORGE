@@ -1,0 +1,21 @@
+order_id,customer,amount,date,region
+1001,John Doe,150.5,2025-01-15,North
+1002,Jane Smith,320.0,2025-01-16,South
+1003,Bob Johnson,89.99,2025-01-17,East
+1004,Alice Brown,220.75,2025-01-18,West
+1005,Charlie Davis,445.2,2025-01-19,North
+1006,Eve Wilson,178.3,2025-01-20,South
+1007,Frank Miller,560.0,2025-01-21,East
+1008,Grace Lee,95.5,2025-01-22,West
+1009,Henry Taylor,310.25,2025-01-23,North
+1010,Ivy Anderson,198.8,2025-01-24,South
+1011,Jack Brown,425.0,2025-01-25,East
+1012,Kelly White,189.5,2025-01-26,West
+1013,Leo Martin,275.3,2025-01-27,North
+1014,Mia Garcia,340.0,2025-01-28,South
+1015,Noah Martinez,198.75,2025-01-29,East
+1016,Olivia Lopez,456.2,2025-01-30,West
+1017,Peter Gonzalez,312.5,2025-01-31,North
+1018,Quinn Rodriguez,178.9,2025-02-01,South
+1019,Ruby Hernandez,289.6,2025-02-02,East
+1020,Sam Wilson,401.25,2025-02-03,West

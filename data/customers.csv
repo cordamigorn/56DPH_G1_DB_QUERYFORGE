@@ -1,0 +1,11 @@
+customer_id,name,email,phone,country
+1,John Doe,john.doe@email.com,555-0101,USA
+2,Jane Smith,jane.smith@email.com,555-0102,Canada
+3,Bob Johnson,bob.johnson@email.com,555-0103,UK
+4,Alice Brown,alice.brown@email.com,555-0104,Australia
+5,Charlie Davis,charlie.davis@email.com,555-0105,USA
+6,Eve Wilson,eve.wilson@email.com,555-0106,Canada
+7,Frank Miller,frank.miller@email.com,555-0107,UK
+8,Grace Lee,grace.lee@email.com,555-0108,Australia
+9,Henry Taylor,henry.taylor@email.com,555-0109,USA
+10,Ivy Anderson,ivy.anderson@email.com,555-0110,Canada

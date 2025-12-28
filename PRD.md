@@ -501,6 +501,27 @@ Retrieve complete execution and repair logs.
 
 ---
 
+### 6.5 Web UI (MVP)
+
+A minimal website to interact with the existing REST API.
+
+Pages:
+- Home ("/") — form to submit prompt and user_id; posts to /pipeline/create; shows created pipeline_id and draft.
+- Pipeline Run ("/pipelines/{id}/run") — button to trigger sandbox run; calls POST /pipeline/run/{id}; displays step-by-step execution status.
+- Pipeline Logs ("/pipelines/{id}/logs") — displays combined execution and repair logs; calls GET /pipeline/{id}/logs.
+
+Implementation:
+- FastAPI templates (Jinja2) or static HTML+JS served by FastAPI.
+- Use fetch/AJAX to call the existing endpoints; no direct filesystem/DB operations from the frontend.
+- No authentication in MVP; single-user context.
+
+Acceptance Criteria:
+- [ ] Users can create, run, repair, and view logs via the web UI.
+- [ ] Frontend uses only allowed endpoints and provides clear feedback.
+- [ ] Works locally with uvicorn and serves at "/".
+
+---
+
 ## 7. Non-Functional Requirements
 
 ### 7.1 Security

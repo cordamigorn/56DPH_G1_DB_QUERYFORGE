@@ -36,12 +36,28 @@ class PipelineRunRequest(BaseModel):
 
 class PipelineRepairRequest(BaseModel):
     """Request model for repairing a pipeline"""
-    attempt: int = Field(default=1, description="Repair attempt number", ge=1, le=3)
+    max_attempts: int = Field(default=3, description="Maximum repair attempts", ge=1, le=5)
+    auto_retry: bool = Field(default=True, description="Automatically retry after repair")
     
     class Config:
         json_schema_extra = {
             "example": {
-                "attempt": 1
+                "max_attempts": 3,
+                "auto_retry": True
+            }
+        }
+
+
+class PipelineCommitRequest(BaseModel):
+    """Request model for committing a pipeline"""
+    force_commit: bool = Field(default=False, description="Bypass high-risk warnings")
+    create_backup: bool = Field(default=True, description="Create pre-commit backup")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "force_commit": False,
+                "create_backup": True
             }
         }
 
@@ -63,6 +79,7 @@ class PipelineCreateResponse(BaseModel):
     status: Optional[str] = Field(None, description="Pipeline status")
     draft_pipeline: Optional[List[PipelineStep]] = Field(None, description="Generated pipeline steps")
     created_at: Optional[str] = Field(None, description="Creation timestamp")
+    context_used: Optional[ContextSummary] = Field(None, description="Context summary")
     warnings: Optional[List[Dict[str, Any]]] = Field(None, description="Validation warnings")
     error: Optional[str] = Field(None, description="Error message if failed")
     error_type: Optional[str] = Field(None, description="Error type classification")
@@ -126,11 +143,45 @@ class PipelineRepairResponse(BaseModel):
     """Response model for pipeline repair"""
     success: bool
     pipeline_id: int
-    repair_attempt: int
-    error_analysis: Optional[str] = None
-    repaired_pipeline: Optional[List[PipelineStep]] = None
-    retry_status: Optional[str] = None
+    repair_attempts: List[Dict[str, Any]] = Field(default_factory=list)
+    current_status: Optional[str] = None
+    final_execution_result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
+
+
+class ContextSummary(BaseModel):
+    """Summary of MCP context used"""
+    tables_referenced: List[str] = Field(default_factory=list)
+    files_referenced: List[str] = Field(default_factory=list)
+    total_steps: int = 0
+
+
+class PipelineCommitResponse(BaseModel):
+    """Response model for pipeline commit"""
+    success: bool
+    pipeline_id: int
+    commit_status: str
+    snapshot_id: Optional[int] = None
+    operations_performed: Optional[Dict[str, Any]] = None
+    commit_time: Optional[str] = None
+    rollback_available: bool = False
+    error: Optional[str] = None
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "success": True,
+                "pipeline_id": 42,
+                "commit_status": "committed",
+                "snapshot_id": 15,
+                "operations_performed": {
+                    "sql_operations": 2,
+                    "file_operations": 1
+                },
+                "commit_time": "2025-11-27T10:32:00Z",
+                "rollback_available": True
+            }
+        }
 
 
 class ExecutionLog(BaseModel):
@@ -161,11 +212,14 @@ __all__ = [
     'PipelineCreateRequest',
     'PipelineRunRequest',
     'PipelineRepairRequest',
+    'PipelineCommitRequest',
     'PipelineCreateResponse',
     'PipelineRunResponse',
     'PipelineRepairResponse',
+    'PipelineCommitResponse',
     'PipelineLogsResponse',
     'PipelineStep',
     'ExecutionLog',
-    'RepairLog'
+    'RepairLog',
+    'ContextSummary'
 ]

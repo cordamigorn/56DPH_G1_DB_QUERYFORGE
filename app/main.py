@@ -1,14 +1,17 @@
 """
 FastAPI application entry point for QueryForge
 """
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, status
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 import logging
+import traceback
 
 from app.core.config import settings
 from app.core.database import init_database_async, verify_schema
-from app.api.routes import pipeline
+from app.api.routes import pipeline, web
 
 # Configure logging
 logging.basicConfig(
@@ -89,6 +92,42 @@ app.add_middleware(
 )
 
 
+# Global exception handlers
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """
+    Global exception handler for unhandled exceptions
+    """
+    logger.error(f"Unhandled exception: {exc}")
+    logger.error(traceback.format_exc())
+    
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={
+            "error": "Internal server error",
+            "error_code": "INTERNAL_ERROR",
+            "details": str(exc) if settings.DEBUG else "An unexpected error occurred",
+            "timestamp": logging.Formatter().formatTime(logging.makeLogRecord({}), datefmt="%Y-%m-%dT%H:%M:%SZ")
+        }
+    )
+
+
+@app.exception_handler(ValueError)
+async def value_error_handler(request: Request, exc: ValueError):
+    """
+    Handle validation errors
+    """
+    return JSONResponse(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        content={
+            "error": "Validation error",
+            "error_code": "VALIDATION_ERROR",
+            "details": str(exc),
+            "timestamp": logging.Formatter().formatTime(logging.makeLogRecord({}), datefmt="%Y-%m-%dT%H:%M:%SZ")
+        }
+    )
+
+
 # Health check endpoint
 @app.get("/health", tags=["Health"])
 async def health_check():
@@ -107,18 +146,15 @@ async def health_check():
     }
 
 
-@app.get("/", tags=["Root"])
-async def root():
+@app.get("/", tags=["Root"], include_in_schema=False)
+async def root_redirect():
     """
-    Root endpoint with API information
+    Redirect root to web UI
     """
-    return {
-        "message": f"Welcome to {settings.APP_NAME}",
-        "version": settings.APP_VERSION,
-        "docs": "/docs",
-        "health": "/health"
-    }
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/web/")
 
 
 # Include API routers
+app.include_router(web.router, prefix="/web", tags=["Web UI"], include_in_schema=False)
 app.include_router(pipeline.router, prefix="/pipeline", tags=["Pipeline"])

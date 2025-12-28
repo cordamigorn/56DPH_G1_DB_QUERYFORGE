@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QueryForge - Pipeline Creator</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+            padding: 40px;
+        }
+        
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 2.5em;
+        }
+        
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 1.1em;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        label {
+            display: block;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 8px;
+        }
+        
+        input[type="number"] {
+            width: 200px;
+            padding: 10px;
+            border: 2px solid #e0e0e0;
+            border-radius: 5px;
+            font-size: 1em;
+        }
+        
+        textarea {
+            width: 100%;
+            padding: 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 5px;
+            font-size: 1em;
+            resize: vertical;
+            min-height: 120px;
+            font-family: inherit;
+        }
+        
+        input:focus, textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 12px 30px;
+            border: none;
+            border-radius: 5px;
+            font-size: 1.1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        
+        .btn:hover {
+            transform: translateY(-2px);
+        }
+        
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        
+        .result {
+            margin-top: 30px;
+            padding: 20px;
+            border-radius: 5px;
+            display: none;
+        }
+        
+        .result.success {
+            background: #d4edda;
+            border: 2px solid #c3e6cb;
+            color: #155724;
+        }
+        
+        .result.error {
+            background: #f8d7da;
+            border: 2px solid #f5c6cb;
+            color: #721c24;
+        }
+        
+        .pipelines-section {
+            margin-top: 50px;
+        }
+        
+        .pipelines-section h2 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+        
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        
+        th {
+            background: #f8f9fa;
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .status-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 0.85em;
+            font-weight: 600;
+        }
+        
+        .status-pending {
+            background: #e0e0e0;
+            color: #666;
+        }
+        
+        .status-sandbox_success, .status-success {
+            background: #d4edda;
+            color: #155724;
+        }
+        
+        .status-sandbox_failed, .status-failed {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        
+        .status-committed {
+            background: #d1ecf1;
+            color: #0c5460;
+        }
+        
+        .action-btn {
+            padding: 6px 12px;
+            border-radius: 4px;
+            border: none;
+            cursor: pointer;
+            font-size: 0.9em;
+            margin-right: 5px;
+            text-decoration: none;
+            display: inline-block;
+        }
+        
+        .btn-view {
+            background: #667eea;
+            color: white;
+        }
+        
+        .spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255,255,255,.3);
+            border-radius: 50%;
+            border-top-color: #fff;
+            animation: spin 1s ease-in-out infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔧 QueryForge</h1>
+        <p class="subtitle">Automated Data Pipeline Generation System</p>
+        
+        <form id="pipelineForm">
+            <div class="form-group">
+                <label for="userId">User ID:</label>
+                <input type="number" id="userId" name="userId" value="1" min="1" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="prompt">Describe your data task:</label>
+                <textarea id="prompt" name="prompt" placeholder="Example: Import inventory.json into products table" required></textarea>
+            </div>
+            
+            <button type="submit" class="btn" id="submitBtn">
+                Create Pipeline
+            </button>
+        </form>
+        
+        <div id="result" class="result"></div>
+        
+        <div class="pipelines-section">
+            <h2>Recent Pipelines</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Prompt</th>
+                        <th>Status</th>
+                        <th>Created</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="pipelinesTable">
+                    <tr>
+                        <td colspan="5" style="text-align: center; color: #999;">Loading...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+    
+    <script>
+        // Load recent pipelines
+        async function loadPipelines() {
+            try {
+                const response = await fetch('/pipeline/');
+                const data = await response.json();
+                
+                const tbody = document.getElementById('pipelinesTable');
+                
+                if (data.success && data.pipelines.length > 0) {
+                    tbody.innerHTML = data.pipelines.map(p => `
+                        <tr>
+                            <td>${p.id}</td>
+                            <td>${p.prompt_text.substring(0, 60)}${p.prompt_text.length > 60 ? '...' : ''}</td>
+                            <td><span class="status-badge status-${p.status}">${p.status}</span></td>
+                            <td>${new Date(p.created_at).toLocaleString()}</td>
+                            <td>
+                                <a href="/web/pipeline/${p.id}/view" class="action-btn btn-view">View</a>
+                            </td>
+                        </tr>
+                    `).join('');
+                } else {
+                    tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: #999;">No pipelines yet</td></tr>';
+                }
+            } catch (error) {
+                console.error('Error loading pipelines:', error);
+            }
+        }
+        
+        // Handle form submission
+        document.getElementById('pipelineForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const submitBtn = document.getElementById('submitBtn');
+            const resultDiv = document.getElementById('result');
+            const userId = parseInt(document.getElementById('userId').value);
+            const prompt = document.getElementById('prompt').value.trim();
+            
+            if (!prompt || prompt.length < 10) {
+                resultDiv.className = 'result error';
+                resultDiv.style.display = 'block';
+                resultDiv.textContent = 'Please provide a detailed prompt (at least 10 characters)';
+                return;
+            }
+            
+            // Disable button and show loading
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = '<span class="spinner"></span> Creating...';
+            resultDiv.style.display = 'none';
+            
+            try {
+                const response = await fetch('/pipeline/create', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        user_id: userId,
+                        prompt: prompt
+                    })
+                });
+                
+                console.log('Response status:', response.status);
+                console.log('Response OK:', response.ok);
+                
+                const data = await response.json();
+                console.log('Response data:', data);
+                
+                if (response.ok && data.success) {
+                    resultDiv.className = 'result success';
+                    resultDiv.innerHTML = `
+                        <strong>✓ Pipeline created successfully!</strong><br><br>
+                        <strong>Pipeline ID:</strong> ${data.pipeline_id}<br>
+                        <strong>Status:</strong> ${data.status}<br>
+                        <strong>Steps:</strong> ${data.draft_pipeline.length}<br><br>
+                        <a href="/web/pipeline/${data.pipeline_id}/view" class="btn">View Pipeline Details</a>
+                    `;
+                    
+                    // Clear form
+                    document.getElementById('prompt').value = '';
+                    
+                    // Reload pipelines list
+                    loadPipelines();
+                } else {
+                    resultDiv.className = 'result error';
+                    resultDiv.textContent = '✗ Error: ' + (data.error || 'Unknown error occurred');
+                }
+                
+                resultDiv.style.display = 'block';
+                
+            } catch (error) {
+                resultDiv.className = 'result error';
+                resultDiv.textContent = '✗ Network error: ' + error.message;
+                resultDiv.style.display = 'block';
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Create Pipeline';
+            }
+        });
+        
+        // Load pipelines on page load
+        loadPipelines();
+    </script>
+</body>
+</html>

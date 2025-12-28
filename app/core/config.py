@@ -44,6 +44,11 @@ class Settings(BaseSettings):
         description="Delay between retry attempts in seconds"
     )
     
+    GEMINI_MAX_OUTPUT_TOKENS: int = Field(
+        default=8192,
+        description="Maximum tokens allowed in Gemini responses"
+    )
+    
     # Directory paths
     DATA_DIRECTORY: str = Field(
         default="./data",
@@ -83,7 +88,7 @@ class Settings(BaseSettings):
     
     # Allowed bash commands (whitelist)
     ALLOWED_BASH_COMMANDS: List[str] = Field(
-        default=["awk", "sed", "cp", "mv", "curl", "cat", "grep", "cut", "sort", "uniq", "head", "tail", "wc"],
+        default=["awk", "sed", "cp", "mv", "rm", "curl", "cat", "grep", "cut", "sort", "uniq", "head", "tail", "wc", "echo", "[", "test", "set"],
         description="Whitelisted shell commands for sandbox execution"
     )
     

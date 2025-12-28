@@ -28,7 +28,8 @@ class GeminiClient:
         model_name: Optional[str] = None,
         timeout_seconds: Optional[int] = None,
         max_retries: Optional[int] = None,
-        retry_delay_seconds: Optional[float] = None
+        retry_delay_seconds: Optional[float] = None,
+        max_output_tokens: Optional[int] = None
     ):
         """
         Initialize Gemini API client
@@ -39,12 +40,14 @@ class GeminiClient:
             timeout_seconds: Request timeout (uses settings if None)
             max_retries: Maximum retry attempts (uses settings if None)
             retry_delay_seconds: Delay between retries (uses settings if None)
+            max_output_tokens: Maximum tokens to allow in responses
         """
         self.api_key = api_key or settings.GEMINI_API_KEY
         self.model_name = model_name or settings.GEMINI_MODEL
         self.timeout_seconds = timeout_seconds or settings.GEMINI_TIMEOUT_SECONDS
         self.max_retries = max_retries or settings.GEMINI_MAX_RETRIES
         self.retry_delay_seconds = retry_delay_seconds or settings.GEMINI_RETRY_DELAY_SECONDS
+        self.max_output_tokens = max_output_tokens or settings.GEMINI_MAX_OUTPUT_TOKENS
         
         # Validate API key
         if not self.api_key:
@@ -113,40 +116,45 @@ class GeminiClient:
                     'temperature': 0.1,  # Low temperature for consistent output
                     'top_p': 0.95,
                     'top_k': 40,
-                    'max_output_tokens': 2048,
+                    'max_output_tokens': self.max_output_tokens,
                 },
                 safety_settings=safety_settings
             )
             
             elapsed_time = time.time() - start_time
             
-            # Check if response is valid
-            if not response or not hasattr(response, 'text'):
-                # Check for safety blocking
-                if hasattr(response, 'candidates') and response.candidates:
-                    candidate = response.candidates[0]
-                    if hasattr(candidate, 'finish_reason'):
-                        finish_reason = candidate.finish_reason
-                        if finish_reason == 2:  # SAFETY
-                            raise ValueError(
-                                "Response blocked by safety filters. "
-                                "Try rephrasing your request or use a different prompt."
-                            )
-                        elif finish_reason == 3:  # RECITATION
-                            raise ValueError(
-                                "Response blocked due to recitation. "
-                                "Try a more specific or different request."
-                            )
-                raise ValueError("Empty or invalid response from Gemini API")
+            # Check if response contains candidates before touching response.text (which can raise)
+            candidate = None
+            finish_reason = None
+            if hasattr(response, "candidates") and response.candidates:
+                candidate = response.candidates[0]
+                finish_reason = getattr(candidate, "finish_reason", None)
             
-            if not response.text:
-                raise ValueError("Empty response text from Gemini API")
+            # If no content parts are returned, surface a clear, non-retryable error
+            if not candidate or not getattr(candidate, "content", None) or not getattr(candidate.content, "parts", None):
+                reason_label = self._format_finish_reason(finish_reason)
+                raise ValueError(
+                    f"Gemini returned no content (finish_reason={reason_label}). "
+                    "Try rephrasing the request."
+                )
+            
+            # Build text manually to avoid ValueError from response.text when parts are missing
+            text_parts = [
+                getattr(part, "text", "")
+                for part in candidate.content.parts
+                if hasattr(part, "text")
+            ]
+            response_text = "".join(text_parts).strip()
+            
+            if not response_text:
+                reason_label = self._format_finish_reason(finish_reason)
+                raise ValueError(f"Empty response text from Gemini API (finish_reason={reason_label})")
             
             logger.info(f"Gemini API response received in {elapsed_time:.2f}s")
             
             return {
                 "success": True,
-                "response": response.text,
+                "response": response_text,
                 "elapsed_time": elapsed_time
             }
             
@@ -157,7 +165,7 @@ class GeminiClient:
             logger.error(f"Gemini API error ({error_type}): {error_message}")
             
             # Determine if we should retry
-            should_retry = self._should_retry(error_type, retry_count)
+            should_retry = self._should_retry(error_type, retry_count, error_message)
             
             if should_retry:
                 logger.info(f"Retrying after {self.retry_delay_seconds}s delay...")
@@ -170,13 +178,14 @@ class GeminiClient:
                 "error_type": error_type
             }
     
-    def _should_retry(self, error_type: str, retry_count: int) -> bool:
+    def _should_retry(self, error_type: str, retry_count: int, error_message: str = "") -> bool:
         """
         Determine if request should be retried
         
         Args:
             error_type: Type of error encountered
             retry_count: Current retry count
+            error_message: Error message text for additional checks
             
         Returns:
             True if should retry, False otherwise
@@ -184,6 +193,19 @@ class GeminiClient:
         # Don't retry if max retries reached
         if retry_count >= self.max_retries:
             logger.info(f"Max retries ({self.max_retries}) reached, not retrying")
+            return False
+        
+        # Don't retry on model-blocked responses (safety/blocklist/no content)
+        blocked_markers = [
+            "safety",
+            "blocked",
+            "blocklist",
+            "prohibited",
+            "sensitive_information",
+            "recitation"
+        ]
+        if any(marker in error_message.lower() for marker in blocked_markers):
+            logger.info(f"Non-retryable model response error: {error_message}")
             return False
         
         # Retry on network/transient errors
@@ -213,6 +235,24 @@ class GeminiClient:
         # Default: retry for unknown errors
         logger.info(f"Unknown error type: {error_type}, will retry")
         return True
+    
+    def _format_finish_reason(self, finish_reason: Any) -> str:
+        """
+        Convert numeric finish_reason to a human-readable label
+        """
+        reason_map = {
+            0: "unspecified",
+            1: "stop",
+            2: "max_tokens",
+            3: "safety",
+            4: "recitation",
+            5: "other",
+            6: "blocklist",
+            7: "prohibited_content",
+            8: "sensitive_information",
+            9: "malformed_function_call"
+        }
+        return reason_map.get(finish_reason, str(finish_reason))
 
 
 class PromptBuilder:
@@ -623,6 +663,9 @@ class PipelineValidator:
         errors = []
         warnings = []
         
+        # Track tables created within this pipeline
+        created_tables = set()
+        
         for step in pipeline:
             step_number = step.get("step_number", 0)
             step_type = step.get("type", "")
@@ -634,7 +677,12 @@ class PipelineValidator:
                 warnings.extend(bash_warnings)
             
             elif step_type == "sql":
-                sql_errors, sql_warnings = self._validate_sql_step(step_number, content)
+                # Extract tables created in this step before validation
+                create_pattern = r'\bCREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)'
+                for match in re.finditer(create_pattern, content.upper()):
+                    created_tables.add(match.group(1).lower())
+                
+                sql_errors, sql_warnings = self._validate_sql_step(step_number, content, created_tables)
                 errors.extend(sql_errors)
                 warnings.extend(sql_warnings)
         
@@ -670,8 +718,16 @@ class PipelineValidator:
         
         primary_command = tokens[0]
         
-        # Check if command is whitelisted
-        if primary_command not in self.allowed_commands:
+        # Skip shell control structures from whitelist validation
+        control_keywords = {"if", "then", "fi", "else", "elif", "do", "done", "while", "for", "{", "}"}
+        if primary_command in control_keywords:
+            # Still allow file reference checks below
+            primary_is_control = True
+        else:
+            primary_is_control = False
+        
+        # Check if command is whitelisted (only for real commands, not control keywords)
+        if not primary_is_control and primary_command not in self.allowed_commands:
             errors.append({
                 "step_number": step_number,
                 "error_type": "prohibited_command",
@@ -700,13 +756,14 @@ class PipelineValidator:
         
         return errors, warnings
     
-    def _validate_sql_step(self, step_number: int, content: str) -> Tuple[List[Dict], List[Dict]]:
+    def _validate_sql_step(self, step_number: int, content: str, created_tables: set = None) -> Tuple[List[Dict], List[Dict]]:
         """
         Validate SQL step
         
         Args:
             step_number: Step number
             content: SQL content
+            created_tables: Set of tables created in previous steps within same pipeline
             
         Returns:
             Tuple of (errors, warnings)
@@ -714,12 +771,16 @@ class PipelineValidator:
         errors = []
         warnings = []
         
+        if created_tables is None:
+            created_tables = set()
+        
         content_upper = content.upper()
         
         # Extract table references
         table_refs = self._extract_table_references(content)
         for table_ref in table_refs:
-            if table_ref not in self.table_names:
+            # Allow if table exists in schema OR was created in this pipeline
+            if table_ref not in self.table_names and table_ref not in created_tables:
                 errors.append({
                     "step_number": step_number,
                     "error_type": "table_not_found",
@@ -867,13 +928,14 @@ class PipelineValidator:
         Returns:
             List of table names found
         """
-        # Common SQL patterns that reference tables
+        # More precise SQL patterns with word boundaries
         patterns = [
-            r'FROM\s+(\w+)',
-            r'JOIN\s+(\w+)',
-            r'INTO\s+(\w+)',
-            r'TABLE\s+(\w+)',
-            r'UPDATE\s+(\w+)',
+            r'\bFROM\s+(\w+)',
+            r'\bJOIN\s+(\w+)',
+            r'\bINSERT\s+INTO\s+(\w+)',
+            r'\bCREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)',
+            r'\bUPDATE\s+(\w+)',
+            r'\bDROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?(\w+)',
         ]
         
         table_refs = []
@@ -881,7 +943,36 @@ class PipelineValidator:
             matches = re.findall(pattern, content, re.IGNORECASE)
             table_refs.extend(matches)
         
-        return list(set(table_refs))
+        # Filter out common SQL keywords and English words that aren't table names
+        sql_keywords = {
+            'select', 'from', 'where', 'and', 'or', 'not', 'in', 'is', 'as',
+            'on', 'by', 'order', 'group', 'having', 'limit', 'offset',
+            'the', 'a', 'an', 'to', 'of', 'for', 'with', 'into', 'table',
+            'values', 'set', 'if', 'exists', 'null', 'true', 'false'
+        }
+        
+        # Convert to lowercase and filter
+        filtered_refs = []
+        for ref in table_refs:
+            ref_lower = ref.lower()
+            if ref_lower not in sql_keywords:
+                filtered_refs.append(ref_lower)
+        
+        # Filter out common function calls that are not real tables
+        function_like = {
+            "read_json",
+            "read_csv",
+            "read_parquet",
+            "generate_series",
+            "values"
+        }
+        
+        final_refs = []
+        for ref in filtered_refs:
+            if ref.lower() not in function_like:
+                final_refs.append(ref)
+        
+        return list(set(final_refs))
 
 
 class LLMPipelineService:
@@ -970,6 +1061,11 @@ class LLMPipelineService:
             validation_result = validator.validate_pipeline(pipeline)
             
             if not validation_result["is_valid"]:
+                error_details = validation_result.get("errors", [])
+                logger.error(f"Pipeline validation failed with {len(error_details)} errors")
+                for err in error_details:
+                    logger.error(f"  - Step {err.get('step_number', '?')}: {err.get('message', '')}")
+                
                 return {
                     "success": False,
                     "error": "Pipeline validation failed",

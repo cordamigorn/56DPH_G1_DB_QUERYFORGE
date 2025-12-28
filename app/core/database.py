@@ -21,7 +21,11 @@ CREATE TABLE IF NOT EXISTS Pipelines (
     status VARCHAR(50) NOT NULL DEFAULT 'pending',
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    CHECK (status IN ('pending', 'running', 'success', 'failed', 'repaired'))
+    commit_status VARCHAR(50) DEFAULT 'not_committed',
+    commit_time TIMESTAMP,
+    rollback_time TIMESTAMP,
+    CHECK (status IN ('pending', 'running', 'success', 'failed', 'repaired', 'sandbox_success', 'sandbox_failed', 'repaired_success', 'repair_exhausted')),
+    CHECK (commit_status IN ('not_committed', 'commit_in_progress', 'committed', 'commit_failed', 'rolled_back'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_pipelines_user_id ON Pipelines(user_id);
@@ -86,6 +90,24 @@ CREATE TABLE IF NOT EXISTS Repair_Logs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_repair_pipeline ON Repair_Logs(pipeline_id);
+
+-- Filesystem_Changes table: Tracks filesystem modifications during commit
+CREATE TABLE IF NOT EXISTS Filesystem_Changes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    pipeline_id INTEGER NOT NULL,
+    commit_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    operation_type VARCHAR(20) NOT NULL,
+    file_path TEXT NOT NULL,
+    original_hash VARCHAR(64),
+    new_hash VARCHAR(64),
+    backup_path TEXT,
+    can_rollback BOOLEAN NOT NULL DEFAULT 0,
+    rolled_back BOOLEAN NOT NULL DEFAULT 0,
+    FOREIGN KEY (pipeline_id) REFERENCES Pipelines(id) ON DELETE CASCADE,
+    CHECK (operation_type IN ('create', 'modify', 'delete', 'move'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_filesystem_changes_pipeline ON Filesystem_Changes(pipeline_id);
 """
 
 
@@ -208,7 +230,7 @@ def verify_schema() -> bool:
         
         # Check for required tables
         required_tables = ['Pipelines', 'Pipeline_Steps', 'Schema_Snapshots', 
-                          'Execution_Logs', 'Repair_Logs']
+                          'Execution_Logs', 'Repair_Logs', 'Filesystem_Changes']
         
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
         existing_tables = [row[0] for row in cursor.fetchall()]

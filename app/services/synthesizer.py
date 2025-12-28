@@ -158,10 +158,6 @@ class SQLScriptSynthesizer:
 """
         
         script += f"""
--- Enable error reporting
-.mode list
-.headers on
-
 -- Begin transaction
 BEGIN TRANSACTION;
 

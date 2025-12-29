@@ -88,7 +88,20 @@ class Settings(BaseSettings):
     
     # Allowed bash commands (whitelist)
     ALLOWED_BASH_COMMANDS: List[str] = Field(
-        default=["awk", "sed", "cp", "mv", "rm", "curl", "cat", "grep", "cut", "sort", "uniq", "head", "tail", "wc", "echo", "[", "test", "set"],
+        default=[
+            # File operations
+            "cat", "cp", "mv", "rm", "touch", "mkdir", "ls", "find",
+            # Text processing
+            "awk", "sed", "grep", "cut", "sort", "uniq", "head", "tail", "wc", "tr", "paste",
+            # Data utilities
+            "jq", "date", "basename", "dirname",
+            # Shell built-ins and utilities
+            "echo", "printf", "read", "test", "[", "set",
+            # Database utilities
+            "sqlite3",
+            # Network (if needed)
+            "curl", "wget"
+        ],
         description="Whitelisted shell commands for sandbox execution"
     )
     

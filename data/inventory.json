@@ -1,77 +1,77 @@
 [
   {
     "product_id": 1,
-    "stock_level": 45,
+    "stock_level": 2000,
     "warehouse_location": "A1"
   },
   {
     "product_id": 2,
-    "stock_level": 150,
+    "stock_level": 1500,
     "warehouse_location": "A2"
   },
   {
     "product_id": 3,
-    "stock_level": 300,
+    "stock_level": 3000,
     "warehouse_location": "A3"
   },
   {
     "product_id": 4,
-    "stock_level": 25,
+    "stock_level": 250,
     "warehouse_location": "B1"
   },
   {
     "product_id": 5,
-    "stock_level": 35,
+    "stock_level": 350,
     "warehouse_location": "B2"
   },
   {
     "product_id": 6,
-    "stock_level": 80,
+    "stock_level": 800,
     "warehouse_location": "B3"
   },
   {
     "product_id": 7,
-    "stock_level": 60,
+    "stock_level": 600,
     "warehouse_location": "C1"
   },
   {
     "product_id": 8,
-    "stock_level": 50,
+    "stock_level": 500,
     "warehouse_location": "C2"
   },
   {
     "product_id": 9,
-    "stock_level": 100,
+    "stock_level": 1000,
     "warehouse_location": "C3"
   },
   {
     "product_id": 10,
-    "stock_level": 200,
+    "stock_level": 2000,
     "warehouse_location": "D1"
   },
   {
     "product_id": 11,
-    "stock_level": 70,
+    "stock_level": 700,
     "warehouse_location": "D2"
   },
   {
     "product_id": 12,
-    "stock_level": 180,
+    "stock_level": 1800,
     "warehouse_location": "D3"
   },
   {
     "product_id": 13,
-    "stock_level": 250,
+    "stock_level": 2050,
     "warehouse_location": "E1"
   },
   {
     "product_id": 14,
-    "stock_level": 95,
+    "stock_level": 905,
     "warehouse_location": "E2"
   },
   {
     "product_id": 15,
-    "stock_level": 120,
+    "stock_level": 1200,
     "warehouse_location": "E3"
   }
 ]

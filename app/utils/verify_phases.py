@@ -33,7 +33,7 @@ def verify_phase_0():
         import fastapi
         import uvicorn
         import pydantic
-        import google.generativeai
+        import google.genai
         import pytest
         import aiosqlite
         checks.append(("All dependencies installed", True))

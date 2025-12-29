@@ -133,7 +133,7 @@ class ValidationEngine:
         try:
             # Check 1: Pipeline exists
             cursor.execute("SELECT * FROM Pipelines WHERE id = ?", (pipeline_id,))
-            pipeline = cursor.execute_rowget()
+            pipeline = cursor.fetchone()
             if not pipeline:
                 errors.append(f"Pipeline {pipeline_id} not found")
                 return ValidationReport(False, errors, warnings, 0, "unknown")
@@ -315,11 +315,36 @@ class DatabaseCommitter:
                 step_id = step['id']
                 sql_content = step['script_content']
                 
+                # Remove transaction commands from SQL content (we handle transactions here)
+                # Remove BEGIN TRANSACTION, COMMIT, ROLLBACK statements
+                lines = sql_content.split('\n')
+                cleaned_lines = []
+                for line in lines:
+                    line_upper = line.strip().upper()
+                    # Skip transaction control statements
+                    if line_upper.startswith('BEGIN TRANSACTION') or \
+                       line_upper.startswith('COMMIT') or \
+                       line_upper.startswith('ROLLBACK'):
+                        continue
+                    # Skip comment lines that mention transaction
+                    if line.strip().startswith('--') and 'transaction' in line_upper:
+                        continue
+                    cleaned_lines.append(line)
+                
+                sql_content_cleaned = '\n'.join(cleaned_lines).strip()
+                
+                # Skip if only transaction commands were present
+                if not sql_content_cleaned:
+                    continue
+                
                 start_time = time.time()
                 
                 try:
-                    # Execute SQL
-                    cursor.execute(sql_content)
+                    # Split SQL into individual statements and execute each
+                    statements = [s.strip() for s in sql_content_cleaned.split(';') if s.strip()]
+                    for statement in statements:
+                        if statement:
+                            cursor.execute(statement)
                     execution_time_ms = int((time.time() - start_time) * 1000)
                     
                     # Log successful execution

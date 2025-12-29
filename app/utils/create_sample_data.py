@@ -15,6 +15,17 @@ def create_sample_tables():
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
     
+    # Create Sales table (for sales.csv imports)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS Sales (
+            order_id INTEGER PRIMARY KEY,
+            customer TEXT NOT NULL,
+            amount DECIMAL(10, 2) NOT NULL,
+            date DATE NOT NULL,
+            region TEXT NOT NULL
+        )
+    """)
+    
     # Create orders table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS orders (
@@ -84,6 +95,7 @@ def create_sample_tables():
     conn.close()
     
     print("✓ Sample database tables created successfully")
+    print(f"  - Created 'Sales' table (empty, for CSV imports)")
     print(f"  - Created 'orders' table with {len(sample_orders)} records")
     print(f"  - Created 'products' table with {len(sample_products)} records")
 

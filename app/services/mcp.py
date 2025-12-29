@@ -329,15 +329,16 @@ def get_filesystem_metadata(root_directory: Optional[str] = None) -> Dict[str, A
         }
 
 
-def extract_csv_metadata(file_path: str) -> Dict[str, Any]:
+def extract_csv_metadata(file_path: str, preview_rows: int = 20) -> Dict[str, Any]:
     """
-    Extract metadata from CSV file
+    Extract metadata from CSV file including preview of actual data
     
     Args:
         file_path: Path to CSV file
+        preview_rows: Number of data rows to include in preview (default: 20)
         
     Returns:
-        Dictionary with CSV metadata (headers, delimiter, row count estimate)
+        Dictionary with CSV metadata (headers, delimiter, row count, preview)
     """
     try:
         with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
@@ -353,7 +354,7 @@ def extract_csv_metadata(file_path: str) -> Dict[str, Any]:
             except:
                 delimiter = ','  # Default to comma
             
-            # Read headers
+            # Read headers and preview rows
             reader = csv.reader(f, delimiter=delimiter)
             try:
                 headers = next(reader)
@@ -361,15 +362,40 @@ def extract_csv_metadata(file_path: str) -> Dict[str, Any]:
             except StopIteration:
                 headers = []
             
-            # Count rows (estimate from first chunk)
-            f.seek(0)
-            row_count = sum(1 for _ in f) - 1  # Subtract header row
+            # Read preview rows (actual data)
+            preview_data = []
+            for i, row in enumerate(reader):
+                if i >= preview_rows:
+                    break
+                # Clean and format row data
+                cleaned_row = [cell.strip() for cell in row]
+                preview_data.append(cleaned_row)
+            
+            # Count total rows
+            total_rows = i + 1  # Rows we've read so far
+            # Continue counting remaining rows
+            for row in reader:
+                total_rows += 1
         
-        return {
+        result = {
             "headers": headers,
             "delimiter": delimiter,
-            "row_count_estimate": max(0, row_count)
+            "row_count_estimate": total_rows,
+            "preview_rows": len(preview_data)
         }
+        
+        # Add preview data if available
+        if preview_data and headers:
+            # Format as list of dicts for easier LLM understanding
+            preview_formatted = []
+            for row_data in preview_data:
+                if len(row_data) == len(headers):
+                    row_dict = dict(zip(headers, row_data))
+                    preview_formatted.append(row_dict)
+            
+            result["preview"] = preview_formatted
+        
+        return result
         
     except Exception as e:
         logger.warning(f"Error extracting CSV metadata from {file_path}: {e}")
@@ -379,15 +405,16 @@ def extract_csv_metadata(file_path: str) -> Dict[str, Any]:
         }
 
 
-def extract_json_metadata(file_path: str) -> Dict[str, Any]:
+def extract_json_metadata(file_path: str, preview_items: int = 20) -> Dict[str, Any]:
     """
-    Extract metadata from JSON file
+    Extract metadata from JSON file including preview of actual data
     
     Args:
         file_path: Path to JSON file
+        preview_items: Number of items to include in preview (default: 20)
         
     Returns:
-        Dictionary with JSON structure metadata
+        Dictionary with JSON structure metadata and preview
     """
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
@@ -397,14 +424,25 @@ def extract_json_metadata(file_path: str) -> Dict[str, Any]:
             "root_type": type(data).__name__
         }
         
+        result = {"structure": structure}
+        
         if isinstance(data, dict):
             structure["keys"] = list(data.keys())
+            # For dict, show preview of content
+            result["preview"] = data  # Include full dict
+            
         elif isinstance(data, list):
             structure["array_length"] = len(data)
             if data and isinstance(data[0], dict):
                 structure["element_keys"] = list(data[0].keys())
+            
+            # Add preview of array items
+            preview_count = min(len(data), preview_items)
+            result["preview"] = data[:preview_count]
+            result["preview_count"] = preview_count
+            result["total_items"] = len(data)
         
-        return {"structure": structure}
+        return result
         
     except Exception as e:
         logger.warning(f"Error extracting JSON metadata from {file_path}: {e}")

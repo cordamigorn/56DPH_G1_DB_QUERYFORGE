@@ -11,7 +11,7 @@ from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime
 from enum import Enum
 
-import google.generativeai as genai
+import google.genai as genai
 
 from app.core.config import settings
 from app.core.database import get_db_path

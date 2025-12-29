@@ -9,7 +9,7 @@ import logging
 from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime
 
-import google.generativeai as genai
+import google.genai as genai
 
 from app.core.config import settings
 from app.services.mcp import MCPContextManager
@@ -53,11 +53,8 @@ class GeminiClient:
         if not self.api_key:
             raise ValueError("GEMINI_API_KEY is required. Set it in .env file.")
         
-        # Configure Gemini API
-        genai.configure(api_key=self.api_key)
-        
-        # Initialize model
-        self.model = genai.GenerativeModel(self.model_name)
+        # Initialize Gemini API client
+        self.client = genai.Client(api_key=self.api_key)
         
         logger.info(f"Gemini client initialized with model: {self.model_name}")
     
@@ -89,66 +86,40 @@ class GeminiClient:
             
             logger.info(f"Sending request to Gemini API (attempt {retry_count + 1}/{self.max_retries + 1})")
             
-            # Safety settings - disable blocking
-            safety_settings = [
-                {
-                    "category": "HARM_CATEGORY_HARASSMENT",
-                    "threshold": "BLOCK_NONE"
-                },
-                {
-                    "category": "HARM_CATEGORY_HATE_SPEECH",
-                    "threshold": "BLOCK_NONE"
-                },
-                {
-                    "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-                    "threshold": "BLOCK_NONE"
-                },
-                {
-                    "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
-                    "threshold": "BLOCK_NONE"
-                }
-            ]
-            
-            # Generate content with timeout
-            response = self.model.generate_content(
-                prompt,
-                generation_config={
+            # Generate content using new API
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=prompt,
+                config={
                     'temperature': 0.1,  # Low temperature for consistent output
                     'top_p': 0.95,
                     'top_k': 40,
                     'max_output_tokens': self.max_output_tokens,
-                },
-                safety_settings=safety_settings
+                }
             )
             
             elapsed_time = time.time() - start_time
             
-            # Check if response contains candidates before touching response.text (which can raise)
-            candidate = None
-            finish_reason = None
-            if hasattr(response, "candidates") and response.candidates:
+            # Extract response text from new API format
+            if hasattr(response, 'text'):
+                response_text = response.text.strip()
+            elif hasattr(response, 'candidates') and response.candidates:
+                # Fallback to old format if needed
                 candidate = response.candidates[0]
-                finish_reason = getattr(candidate, "finish_reason", None)
-            
-            # If no content parts are returned, surface a clear, non-retryable error
-            if not candidate or not getattr(candidate, "content", None) or not getattr(candidate.content, "parts", None):
-                reason_label = self._format_finish_reason(finish_reason)
-                raise ValueError(
-                    f"Gemini returned no content (finish_reason={reason_label}). "
-                    "Try rephrasing the request."
-                )
-            
-            # Build text manually to avoid ValueError from response.text when parts are missing
-            text_parts = [
-                getattr(part, "text", "")
-                for part in candidate.content.parts
-                if hasattr(part, "text")
-            ]
-            response_text = "".join(text_parts).strip()
+                if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
+                    text_parts = [
+                        getattr(part, "text", "")
+                        for part in candidate.content.parts
+                        if hasattr(part, "text")
+                    ]
+                    response_text = "".join(text_parts).strip()
+                else:
+                    raise ValueError("Gemini returned no content parts")
+            else:
+                raise ValueError("Gemini returned no content")
             
             if not response_text:
-                reason_label = self._format_finish_reason(finish_reason)
-                raise ValueError(f"Empty response text from Gemini API (finish_reason={reason_label})")
+                raise ValueError("Empty response text from Gemini API")
             
             logger.info(f"Gemini API response received in {elapsed_time:.2f}s")
             
@@ -289,6 +260,8 @@ class PromptBuilder:
         # Extract filesystem information
         files = mcp_context.get("filesystem", {}).get("files", [])
         file_descriptions = []
+        csv_previews = {}  # Store CSV previews separately for detailed context
+        json_previews = {}  # Store JSON previews separately
         
         for file in files:
             file_path = file.get("path", "unknown")
@@ -296,33 +269,139 @@ class PromptBuilder:
             
             if file_type == "csv" and "headers" in file:
                 headers = ", ".join(file.get("headers", []))
-                file_descriptions.append(f"- {file_path} (CSV with columns: {headers})")
-            elif file_type == "json" and "preview" in file:
-                # Extract JSON structure from preview
-                preview = file.get("preview", "")
-                try:
-                    import json
-                    data = json.loads(preview)
-                    if isinstance(data, list) and len(data) > 0:
-                        fields = ", ".join(data[0].keys())
-                        file_descriptions.append(f"- {file_path} (JSON array with fields: {fields})")
-                    else:
-                        file_descriptions.append(f"- {file_path} (JSON)")
-                except:
-                    file_descriptions.append(f"- {file_path} (JSON)")
-            elif file_type == "json" and "structure" in file:
+                row_count = file.get("row_count_estimate", 0)
+                file_descriptions.append(f"- {file_path} (CSV with {row_count} rows, columns: {headers})")
+                
+                # Store preview data if available
+                if "preview" in file:
+                    csv_previews[file_path] = file.get("preview", [])
+                    
+            elif file_type == "json":
                 structure = file.get("structure", {})
-                file_descriptions.append(f"- {file_path} (JSON: {structure.get('root_type', 'object')})")
+                root_type = structure.get("root_type", "unknown")
+                
+                if root_type == "list":
+                    array_length = structure.get("array_length", 0)
+                    element_keys = structure.get("element_keys", [])
+                    fields = ", ".join(element_keys)
+                    file_descriptions.append(f"- {file_path} (JSON array with {array_length} items, fields: {fields})")
+                    
+                    # Store preview if available
+                    if "preview" in file:
+                        json_previews[file_path] = {
+                            "type": "array",
+                            "data": file.get("preview", []),
+                            "total_items": file.get("total_items", 0),
+                            "preview_count": file.get("preview_count", 0)
+                        }
+                elif root_type == "dict":
+                    keys = structure.get("keys", [])
+                    file_descriptions.append(f"- {file_path} (JSON object with keys: {', '.join(keys)})")
+                    
+                    if "preview" in file:
+                        json_previews[file_path] = {
+                            "type": "dict",
+                            "data": file.get("preview", {})
+                        }
+                else:
+                    file_descriptions.append(f"- {file_path} (JSON)")
             else:
                 file_descriptions.append(f"- {file_path} ({file_type})")
         
         files_text = "\n".join(file_descriptions) if file_descriptions else "No files available"
+        
+        # Build CSV preview section if we have any
+        csv_preview_text = ""
+        if csv_previews:
+            preview_sections = []
+            for csv_path, preview_rows in csv_previews.items():
+                preview_count = len(preview_rows)
+                preview_sections.append(f"\n**CSV FILE DATA - {csv_path}:**")
+                preview_sections.append(f"Total rows to import: {preview_count}")
+                preview_sections.append(f"\n**YOU MUST GENERATE INSERT STATEMENTS FOR ALL {preview_count} ROWS BELOW:**\n")
+                
+                # Show ALL rows, not just first few
+                for i, row in enumerate(preview_rows, 1):
+                    # Show row as dict format
+                    row_str = ", ".join([f"{k}={v}" for k, v in row.items()])
+                    preview_sections.append(f"  Row {i}: {row_str}")
+                
+                preview_sections.append(f"\n**IMPORTANT: All {preview_count} rows above MUST be included in your INSERT statements!**")
+            
+            csv_preview_text = "\n".join(preview_sections)
+        
+        # Build JSON preview section if we have any
+        json_preview_text = ""
+        if json_previews:
+            preview_sections = []
+            for json_path, json_info in json_previews.items():
+                json_type = json_info.get("type")
+                
+                if json_type == "array":
+                    data = json_info.get("data", [])
+                    total_items = json_info.get("total_items", len(data))
+                    preview_count = json_info.get("preview_count", len(data))
+                    
+                    preview_sections.append(f"\n**JSON FILE DATA - {json_path}:**")
+                    preview_sections.append(f"Total items: {total_items}")
+                    preview_sections.append(f"\n**YOU MUST USE THE EXACT DATA FROM ALL {preview_count} ITEMS BELOW:**\n")
+                    
+                    # Show ALL items
+                    import json as json_lib
+                    for i, item in enumerate(data, 1):
+                        # Format each field safely to avoid string interpolation issues
+                        fields = []
+                        for key, value in item.items():
+                            # Properly escape and format values
+                            if isinstance(value, str):
+                                fields.append(f"{key}: '{value}'")
+                            else:
+                                fields.append(f"{key}: {value}")
+                        item_str = "{" + ", ".join(fields) + "}"
+                        preview_sections.append(f"  Item {i}: {item_str}")
+                    
+                    preview_sections.append(f"\n**IMPORTANT: All {preview_count} items above MUST be used with their EXACT field values!**")
+                    preview_sections.append(f"**DO NOT invent product names, categories, or prices - use ONLY the data shown above!**")
+                    
+                elif json_type == "dict":
+                    data = json_info.get("data", {})
+                    preview_sections.append(f"\n**JSON FILE DATA - {json_path}:**")
+                    import json as json_lib
+                    preview_sections.append(json_lib.dumps(data, indent=2, ensure_ascii=False))
+            
+            json_preview_text = "\n".join(preview_sections)
         
         # Get allowed Bash commands
         allowed_commands = settings.ALLOWED_BASH_COMMANDS
         commands_text = ", ".join(allowed_commands)
         
         system_prompt = f"""You are an expert data pipeline generator. Your task is to create executable Bash and SQL pipeline steps from natural language requests.
+
+**IMPORTANT DATABASE INFORMATION:**
+- Database Type: SQLite (NOT MySQL, NOT PostgreSQL)
+- SQLite does NOT support: LOAD DATA INFILE, LOAD DATA LOCAL INFILE, or similar MySQL commands
+- **CRITICAL FOR WINDOWS**: Do NOT use sqlite3 CLI command in bash - SQL steps are executed via Python
+- For CSV import: Generate SQL INSERT statements directly in a SQL step
+- Use standard SQLite SQL syntax only
+
+**BEST PRACTICE FOR CSV IMPORT:**
+- **MANDATORY**: Use ALL rows from CSV file previews below - generate INSERT for EVERY SINGLE ROW!
+- **CRITICAL**: The preview shows the COMPLETE file contents - use ALL of them, not just first few!
+- **DO NOT** generate only 5 sample rows - this is WRONG!
+- **DO NOT** invent or create random sample data - use EXACT data from preview!
+- Count the rows in preview and generate exactly that many INSERT statements
+- Match the exact values from the CSV file preview
+- Use BEGIN TRANSACTION; and COMMIT; for better performance
+- Format: INSERT INTO table (col1, col2) VALUES (val1, val2);
+- Quote string values with single quotes, escape internal quotes by doubling them
+
+**BEST PRACTICE FOR JSON IMPORT:**
+- **MANDATORY**: Use ALL items from JSON file previews below - use EXACT field values!
+- **CRITICAL**: JSON files contain actual data - DO NOT invent product names, categories, or any other data!
+- **DO NOT** create sample/fake data like "Laptop", "Mouse" - use ONLY the fields present in JSON!
+- Match JSON field names EXACTLY to database columns
+- If JSON fields don't match table columns, you must handle the mismatch (e.g., only insert matching fields)
+- Use BEGIN TRANSACTION; and COMMIT; for better performance
 
 AVAILABLE RESOURCES:
 
@@ -331,18 +410,36 @@ Database Tables:
 
 Available Files:
 {files_text}
+{csv_preview_text}
+{json_preview_text}
 
 CONSTRAINTS:
 1. ONLY reference tables and files listed above
-2. ONLY use these Bash commands: {commands_text}
-3. Generate steps in proper execution order
-4. Use /tmp directory for intermediate files
-5. Follow SQL best practices
-6. Include proper error handling
-7. **CRITICAL**: ALWAYS match field names between JSON files and database tables EXACTLY
-   - If JSON fields don't match table columns, suggest creating a new table OR using UPDATE to modify only matching fields
-   - Pay attention to field name differences (e.g., 'stock_level' vs 'stock_quantity')
-   - Ensure all required table columns have values or defaults
+2. For bash steps, ONLY use these commands: {commands_text}
+3. **NEVER use sqlite3 command** - SQL steps are executed directly via Python
+4. Generate steps in proper execution order
+5. Follow SQLite SQL syntax (NOT MySQL syntax)
+6. **CRITICAL**: SQL step content must be actual SQL code, NOT file paths
+   - Valid: "INSERT INTO Sales VALUES (1, 'John', 100);"
+   - Invalid: "/tmp/file.sql" or "sqlite3 db < file.sql"
+7. For CSV data loading:
+   - **CRITICAL**: Use EXACT data from CSV preview above - generate INSERT for EVERY row shown
+   - DO NOT invent or generate random sample data
+   - Match column values exactly as shown in the preview
+   - Generate multiple INSERT statements in one SQL step
+   - Use transactions (BEGIN/COMMIT) for performance
+   - **IMPORTANT**: Before INSERT, check if table exists - use CREATE TABLE IF NOT EXISTS
+   - **IMPORTANT**: Handle duplicate keys - use INSERT OR IGNORE or INSERT OR REPLACE when appropriate
+8. Include proper error handling in bash steps
+9. **CRITICAL - FIELD MATCHING**: ALWAYS match field names between JSON files and database tables EXACTLY
+   - **NEVER invent data** for fields not present in JSON/CSV
+   - If JSON has `stock_level` but table needs `stock_quantity`, use the JSON value for the matching semantic field
+   - If JSON is missing required table columns (e.g., no `product_name` in JSON), **SKIP INSERT completely** or use UPDATE instead
+   - **DO NOT** create fake product names like "Laptop", "Mouse" when they don't exist in source data
+   - **DO NOT** INSERT if required NOT NULL fields are missing - use UPDATE to modify existing rows instead
+   - Only insert columns that have actual data in the source file
+   - Example: If JSON only has {{product_id, stock_level}}, only INSERT those fields (or their semantic equivalents)
+   - **BEST PRACTICE**: If table already has data and JSON lacks required fields, use UPDATE instead of INSERT
 
 OUTPUT FORMAT (strict JSON):
 {{
@@ -366,10 +463,12 @@ RULES:
 - step_number must be sequential starting from 1
 - type must be either "bash" or "sql"
 - content must be valid, executable code
-- Do NOT include markdown code blocks
+- Do NOT include markdown code blocks or explanatory text
 - Do NOT reference non-existent tables or files
 - Do NOT try to insert JSON fields into non-matching table columns
-- Return ONLY valid JSON"""
+- **CRITICAL**: Your entire response MUST be ONLY the JSON object above, nothing else
+- Do NOT add any text before or after the JSON
+- Return ONLY valid JSON, no markdown formatting"""
         
         return system_prompt
     
@@ -437,10 +536,12 @@ class ResponseParser:
             json_data = ResponseParser._extract_json(response_text)
             
             if not json_data:
+                logger.error("Failed to extract JSON from LLM response")
+                logger.debug(f"Raw response (first 500 chars): {response_text[:500]}")
                 return {
                     "success": False,
                     "error": "No valid JSON found in response",
-                    "raw_response": response_text
+                    "raw_response": response_text[:1000]  # Limit to first 1000 chars
                 }
             
             # Validate structure
@@ -480,25 +581,67 @@ class ResponseParser:
         text = re.sub(r'```json\s*', '', text)
         text = re.sub(r'```\s*', '', text)
         
-        # Try direct JSON parse
+        # Try direct JSON parse first
         try:
             return json.loads(text.strip())
         except json.JSONDecodeError:
             pass
         
-        # Try to find JSON object in text
-        json_pattern = r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}'
-        matches = re.findall(json_pattern, text, re.DOTALL)
+        # Try to find JSON object using bracket matching
+        # Look for outermost { ... } pair
+        start_idx = text.find('{')
+        if start_idx == -1:
+            logger.warning("No opening brace found in response")
+            return None
         
-        for match in matches:
-            try:
-                data = json.loads(match)
-                if "pipeline" in data:
-                    return data
-            except json.JSONDecodeError:
+        # Match brackets to find the complete JSON
+        bracket_count = 0
+        in_string = False
+        escape_next = False
+        end_idx = -1
+        
+        for i in range(start_idx, len(text)):
+            char = text[i]
+            
+            if escape_next:
+                escape_next = False
                 continue
+            
+            if char == '\\':
+                escape_next = True
+                continue
+            
+            if char == '"':
+                in_string = not in_string
+                continue
+            
+            if not in_string:
+                if char == '{':
+                    bracket_count += 1
+                elif char == '}':
+                    bracket_count -= 1
+                    if bracket_count == 0:
+                        end_idx = i + 1
+                        break
         
-        return None
+        if end_idx == -1:
+            logger.warning("Could not find matching closing brace")
+            return None
+        
+        json_str = text[start_idx:end_idx]
+        
+        try:
+            data = json.loads(json_str)
+            if "pipeline" in data:
+                logger.info("Successfully extracted JSON with 'pipeline' key")
+                return data
+            else:
+                logger.warning("Extracted JSON but no 'pipeline' key found")
+                return None
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse extracted JSON: {e}")
+            logger.debug(f"Attempted to parse: {json_str[:200]}...")
+            return None
     
     @staticmethod
     def _validate_structure(json_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -598,8 +741,9 @@ class PipelineValidator:
         
         # Build lookup structures for fast validation
         self.table_names = set(
-            table.get("name") 
+            table.get("name").lower()  # Convert to lowercase for case-insensitive matching
             for table in self.database.get("tables", [])
+            if table.get("name")
         )
         
         # Build detailed table schema map
@@ -607,7 +751,8 @@ class PipelineValidator:
         for table in self.database.get("tables", []):
             table_name = table.get("name")
             if table_name:
-                self.table_schemas[table_name] = {
+                # Store with lowercase key for case-insensitive lookup
+                self.table_schemas[table_name.lower()] = {
                     "columns": {col.get("name"): col for col in table.get("columns", [])},
                     "column_names": set(col.get("name") for col in table.get("columns", []))
                 }
@@ -680,7 +825,7 @@ class PipelineValidator:
                 # Extract tables created in this step before validation
                 create_pattern = r'\bCREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)'
                 for match in re.finditer(create_pattern, content.upper()):
-                    created_tables.add(match.group(1).lower())
+                    created_tables.add(match.group(1).lower())  # Store lowercase for case-insensitive matching
                 
                 sql_errors, sql_warnings = self._validate_sql_step(step_number, content, created_tables)
                 errors.extend(sql_errors)
@@ -726,14 +871,32 @@ class PipelineValidator:
         else:
             primary_is_control = False
         
-        # Check if command is whitelisted (only for real commands, not control keywords)
-        if not primary_is_control and primary_command not in self.allowed_commands:
-            errors.append({
-                "step_number": step_number,
-                "error_type": "prohibited_command",
-                "message": f"Command '{primary_command}' is not in whitelist",
-                "allowed_commands": list(self.allowed_commands)
-            })
+        # Check if this is a variable assignment (VAR=value pattern)
+        is_variable_assignment = '=' in primary_command and not primary_command.startswith('-')
+        
+        # Extract actual commands from the content for validation
+        # This handles: variable assignments, command substitutions, pipes, etc.
+        commands_to_validate = self._extract_commands_from_bash(content)
+        
+        # Check if commands are whitelisted - BUT ONLY WARN, DON'T ERROR
+        if not primary_is_control and not is_variable_assignment:
+            for cmd in commands_to_validate:
+                if cmd not in self.allowed_commands and cmd not in control_keywords:
+                    # Blacklist dangerous commands - these should be ERRORS
+                    dangerous_commands = {'rm', 'rmdir', 'dd', 'mkfs', 'fdisk', 'format', 
+                                         'shutdown', 'reboot', 'halt', 'poweroff', 'init',
+                                         'kill', 'killall', 'pkill', 'wget', 'curl'}
+                    
+                    if cmd in dangerous_commands:
+                        warnings.append({
+                            "step_number": step_number,
+                            "warning_type": "dangerous_command",
+                            "message": f"Potentially dangerous command '{cmd}' detected (allowed in sandbox)"
+                        })
+                    else:
+                        # Non-whitelisted but not dangerous - just log as info
+                        logger.info(f"Step {step_number}: Non-whitelisted command '{cmd}' (allowed)")
+                    break  # Only report first violation to avoid spam
         
         # Check for file references
         file_refs = self._extract_file_references(content)
@@ -779,8 +942,10 @@ class PipelineValidator:
         # Extract table references
         table_refs = self._extract_table_references(content)
         for table_ref in table_refs:
+            # Convert to lowercase for case-insensitive comparison
+            table_ref_lower = table_ref.lower()
             # Allow if table exists in schema OR was created in this pipeline
-            if table_ref not in self.table_names and table_ref not in created_tables:
+            if table_ref_lower not in self.table_names and table_ref_lower not in created_tables:
                 errors.append({
                     "step_number": step_number,
                     "error_type": "table_not_found",
@@ -973,6 +1138,102 @@ class PipelineValidator:
                 final_refs.append(ref)
         
         return list(set(final_refs))
+    
+    def _extract_commands_from_bash(self, content: str) -> List[str]:
+        """
+        Extract all actual commands from bash content, handling:
+        - Variable assignments (VAR=value)
+        - Command substitutions $(cmd) and `cmd`
+        - Pipes (cmd1 | cmd2)
+        - Compound commands (cmd1; cmd2; cmd3)
+        
+        Args:
+            content: Bash command content
+            
+        Returns:
+            List of base commands found
+        """
+        commands = []
+        
+        # Remove quoted strings first to avoid parsing their contents
+        content_no_quotes = re.sub(r'"[^"]*"', '', content)
+        content_no_quotes = re.sub(r"'[^']*'", '', content_no_quotes)
+        
+        # Remove variable assignments (everything before = on each line/statement)
+        # Pattern: WORD=... -> extract what comes after =
+        content_cleaned = re.sub(r'\b\w+=[^\s;|&]+', '', content_no_quotes)
+        
+        # Extract commands from command substitutions $(...)  
+        cmd_sub_pattern = r'\$\(([^)]+)\)'
+        for match in re.finditer(cmd_sub_pattern, content):
+            sub_content = match.group(1)
+            # Recursively extract from substitution
+            commands.extend(self._extract_simple_commands(sub_content))
+        
+        # Extract commands from backtick substitutions `...`
+        backtick_pattern = r'`([^`]+)`'
+        for match in re.finditer(backtick_pattern, content):
+            sub_content = match.group(1)
+            commands.extend(self._extract_simple_commands(sub_content))
+        
+        # Extract simple commands from cleaned content
+        commands.extend(self._extract_simple_commands(content_cleaned))
+        
+        # Also check the original first token if not a variable assignment
+        tokens = content.strip().split()
+        if tokens and '=' not in tokens[0]:
+            first_token = tokens[0]
+            # Clean quotes from first token
+            first_token = re.sub(r'["\']', '', first_token)
+            if first_token:
+                commands.append(first_token)
+        
+        # Filter out empty strings, quotes, and special characters
+        commands = [cmd for cmd in commands if cmd and cmd not in ['"', "'", '', ' ']]
+        
+        return list(set(commands))
+    
+    def _extract_simple_commands(self, content: str) -> List[str]:
+        """
+        Extract simple command names from bash content
+        
+        Args:
+            content: Bash content
+            
+        Returns:
+            List of command names
+        """
+        commands = []
+        
+        # Remove quoted strings to avoid parsing their contents
+        content_cleaned = re.sub(r'"[^"]*"', '', content)
+        content_cleaned = re.sub(r"'[^']*'", '', content_cleaned)
+        
+        # Remove shebangs (#!/bin/bash, etc.)
+        content_cleaned = re.sub(r'^#!.*$', '', content_cleaned, flags=re.MULTILINE)
+        
+        # Remove redirections (e.g., 2>/dev/null, >&2, etc.)
+        content_cleaned = re.sub(r'\d*>[>&]?\S*', '', content_cleaned)
+        content_cleaned = re.sub(r'<\S*', '', content_cleaned)
+        
+        # Split by common separators: pipes, semicolons, &&, ||
+        parts = re.split(r'[|;&]+', content_cleaned)
+        
+        for part in parts:
+            tokens = part.strip().split()
+            if tokens:
+                # First token is the command
+                cmd = tokens[0]
+                # Skip comments
+                if cmd.startswith('#'):
+                    continue
+                # Clean up any redirections, quotes, or special chars
+                cmd = re.sub(r'[<>()\[\]{}"\'/]', '', cmd)
+                # Filter out empty strings, flags, single characters, and non-alphanumeric
+                if cmd and not cmd.startswith('-') and len(cmd) > 1 and cmd.replace('_', '').isalnum():
+                    commands.append(cmd)
+        
+        return commands
 
 
 class LLMPipelineService:

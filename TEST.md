@@ -13,10 +13,10 @@ These prompts have been tested and confirmed to work:
    > "Create customers table from customers.csv and import data"
 
 4. **Insert JSON Data**
-   > "Insert inventory.json file into products table"
+   > "Insert inventory.json file into products table (stock_quantity)"
 
 5. **Join Operations**
-   > "Join customers.csv and Sales table"
+   > "Create a new table named sales_with_customers by joining existing Sales and customers tables on Sales.customer = customers.name. Do not create or import customers/sales from files."
 
 ## 🚀 Execution Steps
 1. **Create Pipeline**: Submit a prompt.
